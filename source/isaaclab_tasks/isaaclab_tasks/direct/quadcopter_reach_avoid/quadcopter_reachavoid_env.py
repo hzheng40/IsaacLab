@@ -6,18 +6,24 @@
 from __future__ import annotations
 
 import gymnasium as gym
+import numpy as np
 import torch
+from typing import Dict
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, ArticulationCfg
+from isaaclab.assets import AssetBaseCfg
 from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
 from isaaclab.envs.ui import BaseEnvWindow
-from isaaclab.markers import VisualizationMarkers
+from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.terrains import TerrainImporterCfg
 from isaaclab.utils import configclass
 from isaaclab.utils.math import subtract_frame_transforms
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
+
+import isaacsim.core.utils.prims as prim_utils
 
 ##
 # Pre-defined configs
@@ -26,10 +32,10 @@ from isaaclab_assets import CRAZYFLIE_CFG  # isort: skip
 from isaaclab.markers import CUBOID_MARKER_CFG  # isort: skip
 
 
-class QuadcopterEnvWindow(BaseEnvWindow):
+class QuadcopterRAEnvWindow(BaseEnvWindow):
     """Window manager for the Quadcopter environment."""
 
-    def __init__(self, env: QuadcopterEnv, window_name: str = "IsaacLab"):
+    def __init__(self, env: QuadcopterRAEnv, window_name: str = "IsaacLab"):
         """Initialize the window.
 
         Args:
@@ -37,7 +43,7 @@ class QuadcopterEnvWindow(BaseEnvWindow):
             window_name: The name of the window. Defaults to "IsaacLab".
         """
         # initialize base window
-        super().__init__(env, window_name)
+        super().__init__(env, window_name)  # type: ignore
         # add custom UI elements
         with self.ui_window_elements["main_vstack"]:
             with self.ui_window_elements["debug_frame"]:
@@ -47,30 +53,14 @@ class QuadcopterEnvWindow(BaseEnvWindow):
 
 
 @configclass
-class QuadcopterEnvCfg(DirectRLEnvCfg):
-    # env
-    episode_length_s = 10.0
-    decimation = 2
-    action_space = 4
-    observation_space = 12
-    state_space = 0
-    debug_vis = True
+class DefaultReachAvoidScene(InteractiveSceneCfg):
+    """Configuration for the Reach Avoid scene. The recommended order of specification is terrain, physics-related assets (articulations and rigid bodies), sensors and non-physics-related assets (lights)."""
 
-    ui_window_class_type = QuadcopterEnvWindow
+    # configuration for the scene
+    config: Dict
 
-    # simulation
-    sim: SimulationCfg = SimulationCfg(
-        dt=1 / 100,
-        render_interval=decimation,
-        physics_material=sim_utils.RigidBodyMaterialCfg(
-            friction_combine_mode="multiply",
-            restitution_combine_mode="multiply",
-            static_friction=1.0,
-            dynamic_friction=1.0,
-            restitution=0.0,
-        ),
-    )
-    terrain = TerrainImporterCfg(
+    # floor
+    ground = TerrainImporterCfg(
         prim_path="/World/ground",
         terrain_type="plane",
         collision_group=-1,
@@ -84,11 +74,190 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
         debug_vis=False,
     )
 
+    # obstacles (collision)
+    obstacle = sim_utils.CuboidCfg(
+        size=(12.0, 12.0, 30.0),
+        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.2, 0.2, 0.2)),
+    )
+    obstacle.func("/World/Obstacle", obstacle, translation=(-10.0, 10.0, 0.0))
+
+    # agents
+    num_ego = 8
+    num_opp = 4
+    thrust_to_weight = 1.9
+    moment_scale = 0.01
+    ego_starts = None # TODO: load initial positions
+    opp_starts = None # TODO: load initial positions
+    # create xform prims for all robots
+    for i in range(num_ego):
+        prim_utils.create_prim(f"/World/Ego_{i}", "Xform", translation=ego_starts[i])
+    for j in range(num_opp):
+        prim_utils.create_prim(f"/World/Opp_{i}", "Xform", translation=opp_starts[j])
+    ego_cfg = CRAZYFLIE_CFG.replace(prim_path="/World/Ego_.*/Drone")  # type: ignore
+    opp_cfg = CRAZYFLIE_CFG.replace(prim_path="/World/Opp_.*/Drone")  # type: ignore
+    
+    ego_robots = Articulation(ego_cfg)
+    opp_robogs = Articulation(opp_cfg)
+
+    # goals (no collision)
+    num_goals = 8
+    goal_translations = np.array(
+        [
+            [
+                17.0,
+                17.0,
+                10.0,
+            ],
+            [
+                32.0,
+                17.0,
+                10.0,
+            ],
+            [
+                47.0,
+                17.0,
+                10.0,
+            ],
+            [
+                17.0,
+                32.0,
+                10.0,
+            ],
+            [
+                32.0,
+                32.0,
+                10.0,
+            ],
+            [
+                47.0,
+                32.0,
+                10.0,
+            ],
+            [
+                17.0,
+                47.0,
+                10.0,
+            ],
+            [
+                32.0,
+                47.0,
+                10.0,
+            ],
+        ]
+    )
+
+    goal_markers_cfg = VisualizationMarkersCfg(
+        prim_path="/World/Goals",
+        markers={
+            "cuboid": sim_utils.CuboidCfg(
+                size=(4.0, 4.0, 4.0),
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(0.0, 0.6, 0.0)
+                ),
+            ),
+        },
+    )
+    goal_markers = VisualizationMarkers(goal_markers_cfg)
+    goal_markers.visualize(translations=goal_translations)
+
+    # altitude zones (no collision)
+    # altitude_zone_markers_cfg = VisualizationMarkersCfg(
+    #     prim_path="/World/AltitudeZones",
+    #     markers={
+    #         "cuboid": sim_utils.CuboidCfg(
+    #             size=(12.0, 12.0, 4.0),
+    #             visual_material=sim_utils.PreviewSurfaceCfg(
+    #                 diffuse_color=(0.0, 0.0, 1.0)
+    #             ),
+    #         ),
+    #     },
+    # )
+    # altitude_zone_markers = VisualizationMarkers(altitude_zone_markers_cfg)
+    # altitude_zone_markers.visualize(translations=np.array([[-10.0, 10.0, 2.0]]))
+
+    # starting zones (no collision)
+    ego_start_markers_cfg = VisualizationMarkersCfg(
+        prim_path="/World/Ego_start",
+        markers={
+            "cuboid": sim_utils.CuboidCfg(
+                size=(
+                    11.0,
+                    11.0,
+                    11.0,
+                ),
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(0.0, 0.0, 0.3)
+                ),
+            ),
+        },
+    )
+    ego_start_markers = VisualizationMarkers(ego_start_markers_cfg)
+    ego_start_markers.visualize(
+        translations=np.array(
+            [
+                [
+                    -32.0,
+                    -14.0,
+                    1.0,
+                ]
+            ]
+        )
+    )
+
+    opp_start_markers_cfg = VisualizationMarkersCfg(
+        prim_path="/World/Opp_start",
+        markers={
+            "cuboid": sim_utils.CuboidCfg(
+                size=(4.0, 4.0, 4.0),
+                visual_material=sim_utils.PreviewSurfaceCfg(
+                    diffuse_color=(0.0, 0.6, 0.0)
+                ),
+            ),
+        },
+    )
+    opp_start_markers = VisualizationMarkers(opp_start_markers_cfg)
+    opp_start_markers.visualize(translations=np.array([[-32.0, 40.0, 3.0]]))
+
+    # light
+    light = AssetBaseCfg(
+        prim_path="/World/light",
+        spawn=sim_utils.DistantLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75)),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, 500.0)),
+    )
+
+
+@configclass
+class QuadcopterRAEnvCfg(DirectRLEnvCfg):
+    # env
+    episode_length_s = 10.0
+    decimation = 2
+    action_space = 4
+    observation_space = 12
+    state_space = 0
+    debug_vis = True
+
+    ui_window_class_type = QuadcopterRAEnvWindow
+
+    # simulation
+    sim: SimulationCfg = SimulationCfg(
+        dt=1 / 100,
+        render_interval=decimation,
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply",
+            restitution_combine_mode="multiply",
+            static_friction=1.0,
+            dynamic_friction=1.0,
+            restitution=0.0,
+        ),
+    )
+
     # scene
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=2.5, replicate_physics=True)
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(
+        num_envs=4096, env_spacing=2.5, replicate_physics=True
+    )
 
     # robot
-    robot: ArticulationCfg = CRAZYFLIE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+    robot: ArticulationCfg = CRAZYFLIE_CFG.replace(prim_path="/World/envs/env_.*/Robot")  # type: ignore
     thrust_to_weight = 1.9
     moment_scale = 0.01
 
@@ -98,14 +267,20 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
     distance_to_goal_reward_scale = 15.0
 
 
-class QuadcopterEnv(DirectRLEnv):
-    cfg: QuadcopterEnvCfg
+class QuadcopterRAEnv(DirectRLEnv):
+    cfg: QuadcopterRAEnvCfg
 
-    def __init__(self, cfg: QuadcopterEnvCfg, render_mode: str | None = None, **kwargs):
+    def __init__(
+        self, cfg: QuadcopterRAEnvCfg, render_mode: str | None = None, **kwargs
+    ):
         super().__init__(cfg, render_mode, **kwargs)
 
         # Total thrust and moment applied to the base of the quadcopter
-        self._actions = torch.zeros(self.num_envs, gym.spaces.flatdim(self.single_action_space), device=self.device)
+        self._actions = torch.zeros(
+            self.num_envs,
+            gym.spaces.flatdim(self.single_action_space),
+            device=self.device,
+        )
         self._thrust = torch.zeros(self.num_envs, 1, 3, device=self.device)
         self._moment = torch.zeros(self.num_envs, 1, 3, device=self.device)
         # Goal position
@@ -123,7 +298,9 @@ class QuadcopterEnv(DirectRLEnv):
         # Get specific body indices
         self._body_id = self._robot.find_bodies("body")[0]
         self._robot_mass = self._robot.root_physx_view.get_masses()[0].sum()
-        self._gravity_magnitude = torch.tensor(self.sim.cfg.gravity, device=self.device).norm()
+        self._gravity_magnitude = torch.tensor(
+            self.sim.cfg.gravity, device=self.device
+        ).norm()
         self._robot_weight = (self._robot_mass * self._gravity_magnitude).item()
 
         # add handle for debug visualization (this is set to a valid handle inside set_debug_vis)
@@ -144,15 +321,24 @@ class QuadcopterEnv(DirectRLEnv):
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone().clamp(-1.0, 1.0)
-        self._thrust[:, 0, 2] = self.cfg.thrust_to_weight * self._robot_weight * (self._actions[:, 0] + 1.0) / 2.0
+        self._thrust[:, 0, 2] = (
+            self.cfg.thrust_to_weight
+            * self._robot_weight
+            * (self._actions[:, 0] + 1.0)
+            / 2.0
+        )
         self._moment[:, 0, :] = self.cfg.moment_scale * self._actions[:, 1:]
 
     def _apply_action(self):
-        self._robot.set_external_force_and_torque(self._thrust, self._moment, body_ids=self._body_id)
+        self._robot.set_external_force_and_torque(
+            self._thrust, self._moment, body_ids=self._body_id
+        )
 
     def _get_observations(self) -> dict:
         desired_pos_b, _ = subtract_frame_transforms(
-            self._robot.data.root_state_w[:, :3], self._robot.data.root_state_w[:, 3:7], self._desired_pos_w
+            self._robot.data.root_state_w[:, :3],
+            self._robot.data.root_state_w[:, 3:7],
+            self._desired_pos_w,
         )
         obs = torch.cat(
             [
@@ -169,12 +355,16 @@ class QuadcopterEnv(DirectRLEnv):
     def _get_rewards(self) -> torch.Tensor:
         lin_vel = torch.sum(torch.square(self._robot.data.root_lin_vel_b), dim=1)
         ang_vel = torch.sum(torch.square(self._robot.data.root_ang_vel_b), dim=1)
-        distance_to_goal = torch.linalg.norm(self._desired_pos_w - self._robot.data.root_pos_w, dim=1)
+        distance_to_goal = torch.linalg.norm(
+            self._desired_pos_w - self._robot.data.root_pos_w, dim=1
+        )
         distance_to_goal_mapped = 1 - torch.tanh(distance_to_goal / 0.8)
         rewards = {
             "lin_vel": lin_vel * self.cfg.lin_vel_reward_scale * self.step_dt,
             "ang_vel": ang_vel * self.cfg.ang_vel_reward_scale * self.step_dt,
-            "distance_to_goal": distance_to_goal_mapped * self.cfg.distance_to_goal_reward_scale * self.step_dt,
+            "distance_to_goal": distance_to_goal_mapped
+            * self.cfg.distance_to_goal_reward_scale
+            * self.step_dt,
         }
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
         # Logging
@@ -184,12 +374,15 @@ class QuadcopterEnv(DirectRLEnv):
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-        died = torch.logical_or(self._robot.data.root_pos_w[:, 2] < 0.1, self._robot.data.root_pos_w[:, 2] > 2.0)
+        died = torch.logical_or(
+            self._robot.data.root_pos_w[:, 2] < 0.1,
+            self._robot.data.root_pos_w[:, 2] > 2.0,
+        )
         return died, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None or len(env_ids) == self.num_envs:
-            env_ids = self._robot._ALL_INDICES
+            env_ids = self._robot._ALL_INDICES  # type: ignore
 
         # Logging
         final_distance_to_goal = torch.linalg.norm(
@@ -198,41 +391,53 @@ class QuadcopterEnv(DirectRLEnv):
         extras = dict()
         for key in self._episode_sums.keys():
             episodic_sum_avg = torch.mean(self._episode_sums[key][env_ids])
-            extras["Episode_Reward/" + key] = episodic_sum_avg / self.max_episode_length_s
+            extras["Episode_Reward/" + key] = (
+                episodic_sum_avg / self.max_episode_length_s
+            )
             self._episode_sums[key][env_ids] = 0.0
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
         extras = dict()
-        extras["Episode_Termination/died"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
-        extras["Episode_Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
+        extras["Episode_Termination/died"] = torch.count_nonzero(
+            self.reset_terminated[env_ids]
+        ).item()
+        extras["Episode_Termination/time_out"] = torch.count_nonzero(
+            self.reset_time_outs[env_ids]
+        ).item()
         extras["Metrics/final_distance_to_goal"] = final_distance_to_goal.item()
         self.extras["log"].update(extras)
 
-        self._robot.reset(env_ids)
-        super()._reset_idx(env_ids)
+        self._robot.reset(env_ids)  # type: ignore
+        super()._reset_idx(env_ids)  # type: ignore
         if len(env_ids) == self.num_envs:
             # Spread out the resets to avoid spikes in training when many environments reset at a similar time
-            self.episode_length_buf = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
+            self.episode_length_buf = torch.randint_like(
+                self.episode_length_buf, high=int(self.max_episode_length)
+            )
 
         self._actions[env_ids] = 0.0
         # Sample new commands
-        self._desired_pos_w[env_ids, :2] = torch.zeros_like(self._desired_pos_w[env_ids, :2]).uniform_(-2.0, 2.0)
+        self._desired_pos_w[env_ids, :2] = torch.zeros_like(
+            self._desired_pos_w[env_ids, :2]
+        ).uniform_(-2.0, 2.0)
         self._desired_pos_w[env_ids, :2] += self._terrain.env_origins[env_ids, :2]
-        self._desired_pos_w[env_ids, 2] = torch.zeros_like(self._desired_pos_w[env_ids, 2]).uniform_(0.5, 1.5)
+        self._desired_pos_w[env_ids, 2] = torch.zeros_like(
+            self._desired_pos_w[env_ids, 2]
+        ).uniform_(0.5, 1.5)
         # Reset robot state
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
         default_root_state = self._robot.data.default_root_state[env_ids]
         default_root_state[:, :3] += self._terrain.env_origins[env_ids]
-        self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
-        self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
-        self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+        self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)  # type: ignore
+        self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)  # type: ignore
+        self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)  # type: ignore
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         # create markers if necessary for the first tome
         if debug_vis:
             if not hasattr(self, "goal_pos_visualizer"):
-                marker_cfg = CUBOID_MARKER_CFG.copy()
+                marker_cfg = CUBOID_MARKER_CFG.copy()  # type: ignore
                 marker_cfg.markers["cuboid"].size = (0.05, 0.05, 0.05)
                 # -- goal pose
                 marker_cfg.prim_path = "/Visuals/Command/goal_position"
