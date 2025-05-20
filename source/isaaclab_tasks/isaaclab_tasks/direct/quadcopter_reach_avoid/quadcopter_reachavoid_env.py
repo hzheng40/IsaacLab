@@ -171,8 +171,8 @@ def create_scene() -> InteractiveSceneCfg:
             ),
         },
     )
-    goal_markers = VisualizationMarkers(goal_markers_cfg)
-    goal_markers.visualize(translations=goal_translations)
+    # goal_markers = VisualizationMarkers(goal_markers_cfg)
+    # goal_markers.visualize(translations=goal_translations)
 
     # altitude zones (no collision)
     # altitude_zone_markers_cfg = VisualizationMarkersCfg(
@@ -245,10 +245,11 @@ def create_scene() -> InteractiveSceneCfg:
         physics-related assets (articulations and rigid bodies), sensors and non-physics-related assets (lights).
         """
 
+        obstacles = obs
         light = l
-
         ego_start = ego_start_markers_cfg
         opp_start = opp_start_markers_cfg
+        goals = goal_markers_cfg
 
     return DefaultReachAvoidScene()
 
