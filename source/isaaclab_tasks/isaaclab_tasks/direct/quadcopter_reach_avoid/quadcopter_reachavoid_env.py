@@ -55,9 +55,17 @@ class QuadcopterRAEnvWindow(BaseEnvWindow):
 def create_ego_robot_cfg():
     # agents
     num_ego = 8
-    # num_opp = 4
-    ego_starts = None # TODO: load initial positions
-    # opp_starts = None # TODO: load initial positions
+    # random grid pattern for egos based on num_ego
+    ego_starts = np.array(
+        [
+            [
+                -32.0 + 10 * (i % 4),
+                -14.0 + 10 * (i // 4),
+                1.0,
+            ]
+            for i in range(num_ego)
+        ]
+    )
     # create xform prims for all robots
     for i in range(num_ego):
         prim_utils.create_prim(f"/World/Ego_{i}", "Xform", translation=ego_starts[i])
@@ -67,30 +75,39 @@ def create_ego_robot_cfg():
 
     return ego_cfg
 
+
 def create_opp_robot_cfg():
     # agents
-    # num_ego = 8
     num_opp = 4
-    # ego_starts = None # TODO: load initial positions
-    opp_starts = None # TODO: load initial positions
+    opp_starts = np.array(
+        [
+            [
+                -32.0 + 10 * (i % 2),
+                40.0 + 10 * (i // 2),
+                3.0,
+            ]
+            for i in range(num_opp)
+        ]
+    )
     # create xform prims for all robots
-    # for i in range(num_ego):
-    #     prim_utils.create_prim(f"/World/Ego_{i}", "Xform", translation=ego_starts[i])
     for j in range(num_opp):
-        prim_utils.create_prim(f"/World/Opp_{i}", "Xform", translation=opp_starts[j])
+        prim_utils.create_prim(f"/World/Opp_{j}", "Xform", translation=opp_starts[j])
     opp_cfg = CRAZYFLIE_CFG.replace(prim_path="/World/Opp_.*/Drone")  # type: ignore
 
     return opp_cfg
 
+
 def create_scene() -> InteractiveSceneCfg:
-    # configuration for the scene
-    config =  "" # load from yaml
     # obstacles (collision)
-    obstacle = sim_utils.CuboidCfg(
-        size=(12.0, 12.0, 30.0),
-        visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.2, 0.2, 0.2)),
+    obs = AssetBaseCfg(
+        prim_path="/World/Obstacle",
+        spawn=sim_utils.CuboidCfg(
+            size=(12.0, 12.0, 30.0),
+            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.2, 0.2, 0.2)),
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+        ),
+        init_state=AssetBaseCfg.InitialStateCfg(pos=(-10.0, 10.0, 0.0)),
     )
-    obstacle.func("/World/Obstacle", obstacle, translation=(-10.0, 10.0, 0.0))
 
     # goals (no collision)
     num_goals = 8
@@ -139,8 +156,12 @@ def create_scene() -> InteractiveSceneCfg:
         ]
     )
 
+    for i in range(num_goals):
+        prim_utils.create_prim(
+            f"/World/Goal_{i}", "Xform", translation=goal_translations[i]
+        )
     goal_markers_cfg = VisualizationMarkersCfg(
-        prim_path="/World/Goals",
+        prim_path="/World/Goal_.*",
         markers={
             "cuboid": sim_utils.CuboidCfg(
                 size=(4.0, 4.0, 4.0),
@@ -212,7 +233,7 @@ def create_scene() -> InteractiveSceneCfg:
     opp_start_markers.visualize(translations=np.array([[-32.0, 40.0, 3.0]]))
 
     # light
-    light = AssetBaseCfg(
+    l = AssetBaseCfg(
         prim_path="/World/light",
         spawn=sim_utils.DistantLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75)),
         init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, 500.0)),
@@ -221,12 +242,14 @@ def create_scene() -> InteractiveSceneCfg:
     @configclass
     class DefaultReachAvoidScene(InteractiveSceneCfg):
         """Configuration for the Reach Avoid scene. The recommended order of specification is terrain,
-        physics-related assets (articulations and rigid bodies), sensors and non-physics-related assets (lights)."""
-        pass
+        physics-related assets (articulations and rigid bodies), sensors and non-physics-related assets (lights).
+        """
 
-        
+        light = l
 
-    
+        ego_start = ego_start_markers_cfg
+        opp_start = opp_start_markers_cfg
+
     return DefaultReachAvoidScene()
 
 
@@ -274,7 +297,6 @@ class QuadcopterRAEnvCfg(DirectRLEnvCfg):
     scene: InteractiveSceneCfg = create_scene()
 
     # robot
-    # robot: ArticulationCfg = CRAZYFLIE_CFG.replace(prim_path="/World/envs/env_.*/Robot")  # type: ignore
     ego_robot: ArticulationCfg = create_ego_robot_cfg()
     opp_robot: ArticulationCfg = create_opp_robot_cfg()
     thrust_to_weight = 1.9
