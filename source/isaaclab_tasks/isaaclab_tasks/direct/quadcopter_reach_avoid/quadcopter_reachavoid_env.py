@@ -52,52 +52,45 @@ class QuadcopterRAEnvWindow(BaseEnvWindow):
                     self._create_debug_vis_ui_element("targets", self.env)
 
 
-@configclass
-class DefaultReachAvoidScene(InteractiveSceneCfg):
-    """Configuration for the Reach Avoid scene. The recommended order of specification is terrain, physics-related assets (articulations and rigid bodies), sensors and non-physics-related assets (lights)."""
+def create_ego_robot_cfg():
+    # agents
+    num_ego = 8
+    # num_opp = 4
+    ego_starts = None # TODO: load initial positions
+    # opp_starts = None # TODO: load initial positions
+    # create xform prims for all robots
+    for i in range(num_ego):
+        prim_utils.create_prim(f"/World/Ego_{i}", "Xform", translation=ego_starts[i])
+    # for j in range(num_opp):
+    #     prim_utils.create_prim(f"/World/Opp_{i}", "Xform", translation=opp_starts[j])
+    ego_cfg = CRAZYFLIE_CFG.replace(prim_path="/World/Ego_.*/Drone")  # type: ignore
 
+    return ego_cfg
+
+def create_opp_robot_cfg():
+    # agents
+    # num_ego = 8
+    num_opp = 4
+    # ego_starts = None # TODO: load initial positions
+    opp_starts = None # TODO: load initial positions
+    # create xform prims for all robots
+    # for i in range(num_ego):
+    #     prim_utils.create_prim(f"/World/Ego_{i}", "Xform", translation=ego_starts[i])
+    for j in range(num_opp):
+        prim_utils.create_prim(f"/World/Opp_{i}", "Xform", translation=opp_starts[j])
+    opp_cfg = CRAZYFLIE_CFG.replace(prim_path="/World/Opp_.*/Drone")  # type: ignore
+
+    return opp_cfg
+
+def create_scene() -> InteractiveSceneCfg:
     # configuration for the scene
-    config: Dict
-
-    # floor
-    ground = TerrainImporterCfg(
-        prim_path="/World/ground",
-        terrain_type="plane",
-        collision_group=-1,
-        physics_material=sim_utils.RigidBodyMaterialCfg(
-            friction_combine_mode="multiply",
-            restitution_combine_mode="multiply",
-            static_friction=1.0,
-            dynamic_friction=1.0,
-            restitution=0.0,
-        ),
-        debug_vis=False,
-    )
-
+    config =  "" # load from yaml
     # obstacles (collision)
     obstacle = sim_utils.CuboidCfg(
         size=(12.0, 12.0, 30.0),
         visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.2, 0.2, 0.2)),
     )
     obstacle.func("/World/Obstacle", obstacle, translation=(-10.0, 10.0, 0.0))
-
-    # agents
-    num_ego = 8
-    num_opp = 4
-    thrust_to_weight = 1.9
-    moment_scale = 0.01
-    ego_starts = None # TODO: load initial positions
-    opp_starts = None # TODO: load initial positions
-    # create xform prims for all robots
-    for i in range(num_ego):
-        prim_utils.create_prim(f"/World/Ego_{i}", "Xform", translation=ego_starts[i])
-    for j in range(num_opp):
-        prim_utils.create_prim(f"/World/Opp_{i}", "Xform", translation=opp_starts[j])
-    ego_cfg = CRAZYFLIE_CFG.replace(prim_path="/World/Ego_.*/Drone")  # type: ignore
-    opp_cfg = CRAZYFLIE_CFG.replace(prim_path="/World/Opp_.*/Drone")  # type: ignore
-    
-    ego_robots = Articulation(ego_cfg)
-    opp_robogs = Articulation(opp_cfg)
 
     # goals (no collision)
     num_goals = 8
@@ -225,6 +218,17 @@ class DefaultReachAvoidScene(InteractiveSceneCfg):
         init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, 500.0)),
     )
 
+    @configclass
+    class DefaultReachAvoidScene(InteractiveSceneCfg):
+        """Configuration for the Reach Avoid scene. The recommended order of specification is terrain,
+        physics-related assets (articulations and rigid bodies), sensors and non-physics-related assets (lights)."""
+        pass
+
+        
+
+    
+    return DefaultReachAvoidScene()
+
 
 @configclass
 class QuadcopterRAEnvCfg(DirectRLEnvCfg):
@@ -251,13 +255,28 @@ class QuadcopterRAEnvCfg(DirectRLEnvCfg):
         ),
     )
 
-    # scene
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(
-        num_envs=4096, env_spacing=2.5, replicate_physics=True
+    # ground
+    terrain = TerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="plane",
+        collision_group=-1,
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply",
+            restitution_combine_mode="multiply",
+            static_friction=1.0,
+            dynamic_friction=1.0,
+            restitution=0.0,
+        ),
+        debug_vis=False,
     )
 
+    # scene
+    scene: InteractiveSceneCfg = create_scene()
+
     # robot
-    robot: ArticulationCfg = CRAZYFLIE_CFG.replace(prim_path="/World/envs/env_.*/Robot")  # type: ignore
+    # robot: ArticulationCfg = CRAZYFLIE_CFG.replace(prim_path="/World/envs/env_.*/Robot")  # type: ignore
+    ego_robot: ArticulationCfg = create_ego_robot_cfg()
+    opp_robot: ArticulationCfg = create_opp_robot_cfg()
     thrust_to_weight = 1.9
     moment_scale = 0.01
 
