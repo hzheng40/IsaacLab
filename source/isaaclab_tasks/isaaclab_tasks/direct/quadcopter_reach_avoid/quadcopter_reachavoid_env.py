@@ -13,7 +13,7 @@ from typing import Dict
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, ArticulationCfg
 from isaaclab.assets import AssetBaseCfg
-from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
+from isaaclab.envs import DirectMARLEnv, DirectMARLEnvCfg
 from isaaclab.envs.ui import BaseEnvWindow
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
 from isaaclab.scene import InteractiveSceneCfg
@@ -69,8 +69,6 @@ def create_ego_robot_cfg():
     # create xform prims for all robots
     for i in range(num_ego):
         prim_utils.create_prim(f"/World/Ego_{i}", "Xform", translation=ego_starts[i])
-    # for j in range(num_opp):
-    #     prim_utils.create_prim(f"/World/Opp_{i}", "Xform", translation=opp_starts[j])
     ego_cfg = CRAZYFLIE_CFG.replace(prim_path="/World/Ego_.*/Drone")  # type: ignore
 
     return ego_cfg
@@ -97,7 +95,9 @@ def create_opp_robot_cfg():
     return opp_cfg
 
 
-def create_scene() -> InteractiveSceneCfg:
+def create_scene(
+    num_envs: int = 4096, env_spacing: float = 2.5, replicate_physics: bool = True
+) -> InteractiveSceneCfg:
     # obstacles (collision)
     obs = AssetBaseCfg(
         prim_path="/World/Obstacle",
@@ -239,29 +239,100 @@ def create_scene() -> InteractiveSceneCfg:
         init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, 500.0)),
     )
 
+    # ground
+    terrain = TerrainImporterCfg(
+        prim_path="/World/ground",
+        terrain_type="plane",
+        collision_group=-1,
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            friction_combine_mode="multiply",
+            restitution_combine_mode="multiply",
+            static_friction=1.0,
+            dynamic_friction=1.0,
+            restitution=0.0,
+        ),
+        debug_vis=False,
+    )
+
     @configclass
     class DefaultReachAvoidScene(InteractiveSceneCfg):
         """Configuration for the Reach Avoid scene. The recommended order of specification is terrain,
         physics-related assets (articulations and rigid bodies), sensors and non-physics-related assets (lights).
         """
-
+        # ground plane
+        ground = terrain
+        
+        # obstacle collision
         obstacles = obs
-        light = l
+        
+        # robot
+        ego_robot: ArticulationCfg = create_ego_robot_cfg()
+        opp_robot: ArticulationCfg = create_opp_robot_cfg()
+
         ego_start = ego_start_markers_cfg
         opp_start = opp_start_markers_cfg
         goals = goal_markers_cfg
-
-    return DefaultReachAvoidScene()
+        
+        # lighting
+        light = l
+    return DefaultReachAvoidScene(
+        num_envs=num_envs, env_spacing=env_spacing, replicate_physics=replicate_physics
+    )
 
 
 @configclass
-class QuadcopterRAEnvCfg(DirectRLEnvCfg):
+class QuadcopterRAEnvCfg(DirectMARLEnvCfg):
     # env
     episode_length_s = 10.0
     decimation = 2
-    action_space = 4
-    observation_space = 12
-    state_space = 0
+
+    # agents
+    possible_agents = [
+        "ego_0",
+        "ego_1",
+        "ego_2",
+        "ego_3",
+        "ego_4",
+        "ego_5",
+        "ego_6",
+        "ego_7",
+        "opp_0",
+        "opp_1",
+        "opp_2",
+        "opp_3",
+    ]
+    action_spaces = {
+        "ego_0": 4,
+        "ego_1": 4,
+        "ego_2": 4,
+        "ego_3": 4,
+        "ego_4": 4,
+        "ego_5": 4,
+        "ego_6": 4,
+        "ego_7": 4,
+        "opp_0": 4,
+        "opp_1": 4,
+        "opp_2": 4,
+        "opp_3": 4,
+    }
+    # observation space
+    # (position (3), velocity (3), rotation_matrix (3x3), angular_velocity (3))
+    observation_spaces = {
+        "ego_0": 18,
+        "ego_1": 18,
+        "ego_2": 18,
+        "ego_3": 18,
+        "ego_4": 18,
+        "ego_5": 18,
+        "ego_6": 18,
+        "ego_7": 18,
+        "opp_0": 18,
+        "opp_1": 18,
+        "opp_2": 18,
+        "opp_3": 18,
+    }
+
+    state_space = 18 * len(possible_agents)
     debug_vis = True
 
     ui_window_class_type = QuadcopterRAEnvWindow
@@ -279,27 +350,9 @@ class QuadcopterRAEnvCfg(DirectRLEnvCfg):
         ),
     )
 
-    # ground
-    terrain = TerrainImporterCfg(
-        prim_path="/World/ground",
-        terrain_type="plane",
-        collision_group=-1,
-        physics_material=sim_utils.RigidBodyMaterialCfg(
-            friction_combine_mode="multiply",
-            restitution_combine_mode="multiply",
-            static_friction=1.0,
-            dynamic_friction=1.0,
-            restitution=0.0,
-        ),
-        debug_vis=False,
-    )
-
     # scene
     scene: InteractiveSceneCfg = create_scene()
 
-    # robot
-    ego_robot: ArticulationCfg = create_ego_robot_cfg()
-    opp_robot: ArticulationCfg = create_opp_robot_cfg()
     thrust_to_weight = 1.9
     moment_scale = 0.01
 
@@ -309,7 +362,7 @@ class QuadcopterRAEnvCfg(DirectRLEnvCfg):
     distance_to_goal_reward_scale = 15.0
 
 
-class QuadcopterRAEnv(DirectRLEnv):
+class QuadcopterRAEnv(DirectMARLEnv):
     cfg: QuadcopterRAEnvCfg
 
     def __init__(
@@ -325,10 +378,9 @@ class QuadcopterRAEnv(DirectRLEnv):
         )
         self._thrust = torch.zeros(self.num_envs, 1, 3, device=self.device)
         self._moment = torch.zeros(self.num_envs, 1, 3, device=self.device)
-        # Goal position
-        self._desired_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
 
         # Logging
+        # TODO: redo key in the logging
         self._episode_sums = {
             key: torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
             for key in [
@@ -349,17 +401,20 @@ class QuadcopterRAEnv(DirectRLEnv):
         self.set_debug_vis(self.cfg.debug_vis)
 
     def _setup_scene(self):
-        self._robot = Articulation(self.cfg.robot)
-        self.scene.articulations["robot"] = self._robot
+        # instantiate articulations
+        self._ego_robots = Articulation(self.cfg.ego_robot)
+        self._opp_robots = Articulation(self.cfg.opp_robot)
+        self.scene.articulations["ego_robots"] = self._ego_robots
+        self.scene.articulations["opp_robots"] = self._opp_robots
 
+        # instantiate terrain
         self.cfg.terrain.num_envs = self.scene.cfg.num_envs
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
+
+        # Scene should already been instantiated
         # clone and replicate
         self.scene.clone_environments(copy_from_source=False)
-        # add lights
-        light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
-        light_cfg.func("/World/Light", light_cfg)
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone().clamp(-1.0, 1.0)
