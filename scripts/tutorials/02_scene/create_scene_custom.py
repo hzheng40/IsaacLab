@@ -117,7 +117,7 @@ def main():
     # Design scene
     # scene_cfg = CartpoleSceneCfg(num_envs=args_cli.num_envs, env_spacing=2.0)
     # scene = InteractiveScene(scene_cfg)
-    scene = create_scene()
+    scene = create_scene(num_envs=1)
     # Play the simulator
     sim.reset()
     # Now we are ready!
