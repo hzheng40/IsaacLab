@@ -61,15 +61,33 @@ def create_ego_robot_cfg():
             [
                 -32.0 + 10 * (i % 4),
                 -14.0 + 10 * (i // 4),
-                1.0,
+                5.0,
             ]
             for i in range(num_ego)
         ]
     )
+    ego_cfg = []
     # create xform prims for all robots
     for i in range(num_ego):
-        prim_utils.create_prim(f"/World/Ego_{i}", "Xform", translation=ego_starts[i])
-    ego_cfg = CRAZYFLIE_CFG.replace(prim_path="/World/Ego_.*/Drone")  # type: ignore
+        # prim_utils.create_prim(f"/World/Ego_{i}", "Xform", translation=ego_starts[i])
+        # ego_cfg.append(
+        #     AssetBaseCfg(
+        #         prim_path=f"/World/Ego_{i}",
+        #         spawn=CRAZYFLIE_CFG,  # type: ignore
+        #         init_state=AssetBaseCfg.InitialStateCfg(
+        #             pos=ego_starts[i],
+        #         ),
+        #     )
+        # )
+
+        ego_cfg.append(
+            CRAZYFLIE_CFG.replace(
+                prim_path=f"/World/Ego_{i}",
+                init_state=CRAZYFLIE_CFG.init_state.replace(
+                    pos=ego_starts[i],
+                ),
+            )
+        )
 
     return ego_cfg
 
@@ -88,9 +106,26 @@ def create_opp_robot_cfg():
         ]
     )
     # create xform prims for all robots
+    opp_cfg = []
     for j in range(num_opp):
-        prim_utils.create_prim(f"/World/Opp_{j}", "Xform", translation=opp_starts[j])
-    opp_cfg = CRAZYFLIE_CFG.replace(prim_path="/World/Opp_.*/Drone")  # type: ignore
+        # prim_utils.create_prim(f"/World/Opp_{j}", "Xform", translation=opp_starts[j])
+        # opp_cfg.append(
+        #     AssetBaseCfg(
+        #         prim_path=f"/World/Opp_{j}",
+        #         spawn=CRAZYFLIE_CFG,  # type: ignore
+        #         init_state=AssetBaseCfg.InitialStateCfg(
+        #             pos=opp_starts[j],
+        #         ),
+        #     )
+        # )
+        opp_cfg.append(
+            CRAZYFLIE_CFG.replace(
+                prim_path=f"/World/Opp_{j}",
+                init_state=CRAZYFLIE_CFG.init_state.replace(
+                    pos=opp_starts[j],
+                ),
+            )
+        )
 
     return opp_cfg
 
@@ -156,21 +191,25 @@ def create_scene(
         ]
     )
 
+    goal_markers_cfg = []
     for i in range(num_goals):
-        prim_utils.create_prim(
-            f"/World/Goal_{i}", "Xform", translation=goal_translations[i]
-        )
-    goal_markers_cfg = VisualizationMarkersCfg(
-        prim_path="/World/Goal_.*",
-        markers={
-            "cuboid": sim_utils.CuboidCfg(
-                size=(4.0, 4.0, 4.0),
-                visual_material=sim_utils.PreviewSurfaceCfg(
-                    diffuse_color=(0.0, 0.6, 0.0)
+        #     prim_utils.create_prim(
+        #         f"/World/Goal_{i}", "Xform", translation=goal_translations[i]
+        #     )
+        goal_markers_cfg.append(
+            AssetBaseCfg(
+                prim_path=f"/World/Goal_{i}",
+                spawn=sim_utils.CuboidCfg(
+                    size=(4.0, 4.0, 4.0),
+                    visual_material=sim_utils.PreviewSurfaceCfg(
+                        diffuse_color=(0.0, 0.6, 0.0)
+                    ),
                 ),
-            ),
-        },
-    )
+                init_state=AssetBaseCfg.InitialStateCfg(
+                    pos=goal_translations[i],
+                ),
+            )
+        )
     # goal_markers = VisualizationMarkers(goal_markers_cfg)
     # goal_markers.visualize(translations=goal_translations)
 
@@ -232,13 +271,6 @@ def create_scene(
     opp_start_markers = VisualizationMarkers(opp_start_markers_cfg)
     opp_start_markers.visualize(translations=np.array([[-32.0, 40.0, 3.0]]))
 
-    # light
-    l = AssetBaseCfg(
-        prim_path="/World/light",
-        spawn=sim_utils.DistantLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75)),
-        init_state=AssetBaseCfg.InitialStateCfg(pos=(0.0, 0.0, 500.0)),
-    )
-
     # ground
     terrain = TerrainImporterCfg(
         prim_path="/World/ground",
@@ -259,22 +291,24 @@ def create_scene(
         """Configuration for the Reach Avoid scene. The recommended order of specification is terrain,
         physics-related assets (articulations and rigid bodies), sensors and non-physics-related assets (lights).
         """
+
         # ground plane
         ground = terrain
-        
+
         # obstacle collision
         obstacles = obs
-        
+
         # robot
-        ego_robot: ArticulationCfg = create_ego_robot_cfg()
-        opp_robot: ArticulationCfg = create_opp_robot_cfg()
+        ego_robot = create_ego_robot_cfg()
+        opp_robot = create_opp_robot_cfg()
 
         ego_start = ego_start_markers_cfg
         opp_start = opp_start_markers_cfg
         goals = goal_markers_cfg
-        
+
         # lighting
-        light = l
+        light = sim_utils.DistantLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
+
     return DefaultReachAvoidScene(
         num_envs=num_envs, env_spacing=env_spacing, replicate_physics=replicate_physics
     )

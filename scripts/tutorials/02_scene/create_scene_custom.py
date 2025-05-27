@@ -20,8 +20,12 @@ import argparse
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
-parser = argparse.ArgumentParser(description="Tutorial on using the interactive scene interface.")
-parser.add_argument("--num_envs", type=int, default=2, help="Number of environments to spawn.")
+parser = argparse.ArgumentParser(
+    description="Tutorial on using the interactive scene interface."
+)
+parser.add_argument(
+    "--num_envs", type=int, default=2, help="Number of environments to spawn."
+)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -36,7 +40,7 @@ simulation_app = app_launcher.app
 import torch
 
 import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg, Articulation
 from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
 from isaaclab.sim import SimulationContext
 from isaaclab.utils import configclass
@@ -45,18 +49,25 @@ from isaaclab.utils import configclass
 # Pre-defined configs
 ##
 from isaaclab_assets import CARTPOLE_CFG  # isort:skip
-from isaaclab_tasks.direct.quadcopter_reach_avoid.quadcopter_reachavoid_env import create_scene
+from isaaclab_assets import CRAZYFLIE_CFG
+from isaaclab_tasks.direct.quadcopter_reach_avoid.quadcopter_reachavoid_env import (
+    create_scene,
+)
+
 
 @configclass
 class CartpoleSceneCfg(InteractiveSceneCfg):
     """Configuration for a cart-pole scene."""
 
     # ground plane
-    ground = AssetBaseCfg(prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg())
+    ground = AssetBaseCfg(
+        prim_path="/World/defaultGroundPlane", spawn=sim_utils.GroundPlaneCfg()
+    )
 
     # lights
     dome_light = AssetBaseCfg(
-        prim_path="/World/Light", spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
+        prim_path="/World/Light",
+        spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75)),
     )
 
     # articulation
@@ -67,7 +78,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     """Runs the simulation loop."""
     # Extract scene entities
     # note: we only do this here for readability.
-    robot = scene["cartpole"]
+    # robot = scene["cartpole"]
     # Define simulation stepping
     sim_dt = sim.get_physics_dt()
     count = 0
@@ -81,30 +92,30 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
             # root state
             # we offset the root state by the origin since the states are written in simulation world frame
             # if this is not done, then the robots will be spawned at the (0, 0, 0) of the simulation world
-            root_state = robot.data.default_root_state.clone()
-            root_state[:, :3] += scene.env_origins
-            robot.write_root_pose_to_sim(root_state[:, :7])
-            robot.write_root_velocity_to_sim(root_state[:, 7:])
-            # set joint positions with some noise
-            joint_pos, joint_vel = robot.data.default_joint_pos.clone(), robot.data.default_joint_vel.clone()
-            joint_pos += torch.rand_like(joint_pos) * 0.1
-            robot.write_joint_state_to_sim(joint_pos, joint_vel)
+            # root_state = robot.data.default_root_state.clone()
+            # root_state[:, :3] += scene.env_origins
+            # robot.write_root_pose_to_sim(root_state[:, :7])
+            # robot.write_root_velocity_to_sim(root_state[:, 7:])
+            # # set joint positions with some noise
+            # joint_pos, joint_vel = robot.data.default_joint_pos.clone(), robot.data.default_joint_vel.clone()
+            # joint_pos += torch.rand_like(joint_pos) * 0.1
+            # robot.write_joint_state_to_sim(joint_pos, joint_vel)
             # clear internal buffers
-            scene.reset()
-            print("[INFO]: Resetting robot state...")
+            # scene.reset()
+            # print("[INFO]: Resetting robot state...")
         # Apply random action
         # -- generate random joint efforts
-        efforts = torch.randn_like(robot.data.joint_pos) * 5.0
+        # efforts = torch.randn_like(robot.data.joint_pos) * 5.0
         # -- apply action to the robot
-        robot.set_joint_effort_target(efforts)
+        # robot.set_joint_effort_target(efforts)
         # -- write data to sim
-        scene.write_data_to_sim()
+        # scene.write_data_to_sim()
         # Perform step
         sim.step()
         # Increment counter
         count += 1
         # Update buffers
-        scene.update(sim_dt)
+        # scene.update(sim_dt)
 
 
 def main():
@@ -118,6 +129,33 @@ def main():
     # scene_cfg = CartpoleSceneCfg(num_envs=args_cli.num_envs, env_spacing=2.0)
     # scene = InteractiveScene(scene_cfg)
     scene = create_scene(num_envs=1)
+    # instantiate goal_markers
+    for marker in scene.goals:
+        marker.spawn.func(
+            marker.prim_path,
+            marker.spawn,
+            translation=marker.init_state.pos,
+            orientation=marker.init_state.rot,
+        )
+    # instantiate robots
+    for e_robot in scene.ego_robot:
+        e_robot.spawn.func(
+            e_robot.prim_path,
+            e_robot.spawn,
+            translation=e_robot.init_state.pos,
+            orientation=e_robot.init_state.rot,
+        )
+        Articulation(e_robot)
+    for o_robot in scene.opp_robot:
+        o_robot.spawn.func(
+            o_robot.prim_path,
+            o_robot.spawn,
+            translation=o_robot.init_state.pos,
+            orientation=o_robot.init_state.rot,
+        )
+        Articulation(o_robot)
+
+    scene.light.func("/World/Light", scene.light)
     # Play the simulator
     sim.reset()
     # Now we are ready!
