@@ -39,6 +39,7 @@ import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation
 from isaaclab.sim import SimulationContext
 from isaaclab.assets import AssetBaseCfg
+from isaaclab.markers import VisualizationMarkersCfg, VisualizationMarkers
 
 ##
 # Pre-defined configs
@@ -53,7 +54,8 @@ import yaml
 class Tracker:
     def __init__(self, config: Dict, sim: SimulationContext):
         # TODO: load trajectories
-        # shape (timesteps, num_trajectories, num_robots, 6)
+        # shape (timesteps, num_robots, num_trajectories, 6)
+        # loaded traj shape (80, 12, 900, 6)
         self.trajectories = np.load(config["saved_traj"])
 
         # load params
@@ -107,7 +109,7 @@ class Tracker:
 
     def plan(self, robot: Articulation, robot_idx: int, traj_idx: int, sim_time: float):
         device = robot.device
-        ref_traj = self.trajectories[:, traj_idx, robot_idx, :]
+        ref_traj = self.trajectories[:, robot_idx, traj_idx, :]
         # calculate current time index
         t_ind = int(sim_time / self.dt)
         if t_ind >= ref_traj.shape[0]:
@@ -124,7 +126,9 @@ class Tracker:
         ang_vel = robot.data.root_ang_vel_w
 
         # mass
-        mass = robot.data.default_mass.sum(dim=1, keepdim=True)
+        mass = robot.data.default_mass.sum(dim=1, keepdim=True).to(device=device)
+        moment = robot.data.default_inertia
+        print(f"robot mass: {mass}, I: {moment}")
 
         # 1. Outer loop PD -> desired world frame acceleration
         a_cmd = self.Kp_pos * (pos_d - pos) + self.Kd_pos * (vel_d - vel)
@@ -167,7 +171,8 @@ def main():
     # Set main camera
     sim.set_camera_view(eye=(100, -20, 50), target=(0.0, 40.0, 0.0))
 
-    # tracker = Tracker(planning_cfg, sim)
+    traj_ind = 1
+    tracker = Tracker(planning_cfg, sim)
 
     # -------------------------------------------------------------------
     # Spawn things into stage
@@ -280,6 +285,29 @@ def main():
     num_ego = 8
     num_opp = 4
 
+    # trajectory markers
+    traj_markers = []
+    for r_i in range(num_ego + num_opp):
+        traj_marker_cfg = VisualizationMarkersCfg(
+            prim_path="/World/Visuals/Traj",
+            markers={
+                "pt": sim_utils.SphereCfg(
+                    radius=0.2,
+                    visual_material=sim_utils.PreviewSurfaceCfg(
+                        diffuse_color=(
+                            1.0 - r_i / (num_ego + num_opp),
+                            (r_i % 3) * 0.3,
+                            0.0 + r_i / (num_ego + num_opp),
+                        )
+                    ),
+                )
+            },
+        )
+        traj_markers.append(VisualizationMarkers(traj_marker_cfg))
+        traj_markers[r_i].visualize(
+            torch.tensor(tracker.trajectories[:, r_i, traj_ind, :3], device=sim.device)
+        )
+
     ego_starts = np.array(
         [
             [
@@ -328,6 +356,8 @@ def main():
             )
         )
         opps.append(Articulation(opp_cfgs[i]))
+
+    all_robots = egos + opps
     # -------------------------------------------------------------------
 
     # num_robots = 16
@@ -367,6 +397,10 @@ def main():
     # Now we are ready!
     print("[INFO]: Setup complete...")
 
+    # extract initial states
+    # loaded traj shape (80, 12, 900, 6)
+    initial_states = tracker.trajectories[0, :, traj_ind, :]
+
     # Define simulation stepping
     sim_dt = sim.get_physics_dt()
     sim_time = 0.0
@@ -380,47 +414,41 @@ def main():
             count = 0
 
             # reset dof state
-            for robot in egos:
+            for i, robot in enumerate(all_robots):
+                init_pos = initial_states[i, :3]
+                root_state = robot.data.default_root_state.clone()
+                root_state[:, :3] = torch.tensor(init_pos, device=sim.device).view(1, 3)
                 joint_pos, joint_vel = (
                     robot.data.default_joint_pos,
                     robot.data.default_joint_vel,
                 )
                 robot.write_joint_state_to_sim(joint_pos, joint_vel)
-                robot.write_root_pose_to_sim(robot.data.default_root_state[:, :7])
+                robot.write_root_pose_to_sim(root_state[:, :7])
                 robot.write_root_velocity_to_sim(robot.data.default_root_state[:, 7:])
                 robot.reset()
 
-            for robot in opps:
-                joint_pos, joint_vel = (
-                    robot.data.default_joint_pos,
-                    robot.data.default_joint_vel,
-                )
-                robot.write_joint_state_to_sim(joint_pos, joint_vel)
-                robot.write_root_pose_to_sim(robot.data.default_root_state[:, :7])
-                robot.write_root_velocity_to_sim(robot.data.default_root_state[:, 7:])
-                robot.reset()
             # reset command
             print(">>>>>>>> Reset!")
-        # apply action to the robot (make the robot float in place)
-        for i, robot in enumerate(egos):
-            prop_body_ids = robot.find_bodies("m.*_prop")[0]
-            robot_mass = robot.root_physx_view.get_masses().sum()
-            gravity = torch.tensor(sim.cfg.gravity, device=sim.device).norm()
-            forces = torch.zeros(robot.num_instances, 4, 3, device=sim.device)
-            torques = torch.zeros_like(forces)
-            forces[..., 2] = robot_mass * gravity / 4.0
-            robot.set_external_force_and_torque(forces, torques, body_ids=prop_body_ids)
+        # hovering
+        # for i, robot in enumerate(all_robots):
+        #     prop_body_ids = robot.find_bodies("m.*_prop")[0]
+        #     robot_mass = robot.root_physx_view.get_masses().sum()
+        #     gravity = torch.tensor(sim.cfg.gravity, device=sim.device).norm()
+        #     forces = torch.zeros(robot.num_instances, 4, 3, device=sim.device)
+        #     torques = torch.zeros_like(forces)
+        #     forces[..., 2] = robot_mass * gravity / 4.0
+        #     robot.set_external_force_and_torque(forces, torques, body_ids=prop_body_ids)
+        #     robot.write_data_to_sim()
+
+        # plan for each robot
+        for i, robot in enumerate(all_robots):
+            F_des, tau = tracker.plan(robot, i, traj_ind, sim_time)
+            body_id = robot.find_bodies("body")[0]
+            robot.set_external_force_and_torque(
+                F_des.view(-1, 1, 3), tau.view(-1, 1, 3), body_ids=body_id
+            )
             robot.write_data_to_sim()
 
-        for i, robot in enumerate(opps):
-            prop_body_ids = robot.find_bodies("m.*_prop")[0]
-            robot_mass = robot.root_physx_view.get_masses().sum()
-            gravity = torch.tensor(sim.cfg.gravity, device=sim.device).norm()
-            forces = torch.zeros(robot.num_instances, 4, 3, device=sim.device)
-            torques = torch.zeros_like(forces)
-            forces[..., 2] = robot_mass * gravity / 4.0
-            robot.set_external_force_and_torque(forces, torques, body_ids=prop_body_ids)
-            robot.write_data_to_sim()
         # perform step
         sim.step()
         # update sim-time
